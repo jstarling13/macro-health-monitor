@@ -529,6 +529,79 @@ function pageMethod() {
   return page;
 }
 
+
+/* ========================================================= WEEKLY BRIEF */
+/** Client-ready one-pager, written entirely from data.json on every rebuild. */
+function briefModel() {
+  const d = S.d, hd = d.headline, fs = d.factors;
+  const by = (k) => d.markets.find((m) => m.id === k);
+  const week = d.markets.map((m) => m.as_of).sort().pop();
+  const sorted = fs.slice().sort((a, b) => b.score - a.score);
+  const movers = fs.slice().sort((a, b) => Math.abs(b.change_3m) - Math.abs(a.change_3m)).slice(0, 2);
+  const RO = d.backtest.recession_odds, rows = RO.rows;
+  const qi = Math.max(0, rows.findIndex((r) => hd.score >= r.low && hd.score <= r.high + 1e-9));
+  const q = rows[qi === -1 ? (hd.score < rows[0].low ? 0 : 4) : qi];
+  const overall = rows.reduce((a, r) => a + r.recession_share * r.months, 0) / rows.reduce((a, r) => a + r.months, 0);
+  const dir = (x) => (x > 1 ? "improved" : x < -1 ? "weakened" : "held steady");
+  const mv = (m) => (m.kind === "rate" ? `${m.chg_1w >= 0 ? "up" : "down"} ${Math.abs(m.chg_1w).toFixed(0)} bp` : `${m.chg_1w >= 0 ? "up" : "down"} ${Math.abs(m.chg_1w).toFixed(1)}%`);
+  const lvl = (m) => (m.kind === "rate" ? f2(m.last) + "%" : big(m.last));
+  const cut = [35, 45, 60, 70];
+  const near = fs.filter((f) => cut.some((c) => Math.abs(f.score - c) < 3)).map((f) => {
+    const c = cut.reduce((a, b) => (Math.abs(f.score - b) < Math.abs(f.score - a) ? b : a));
+    return `${f.label} (${f0(f.score)}) sits near the ${c} line between grades ${gradeOf(c - 0.1)} and ${gradeOf(c)}, so a small change would move its grade.`;
+  });
+  const weak = sorted[sorted.length - 1];
+  const lc = (t) => (/^([A-Z]{2,}|[A-Z]\.)/.test(t) ? t : t[0].toLowerCase() + t.slice(1));
+  const asofs = d.markets.map((m) => m.as_of), common = asofs.sort((a, b) => asofs.filter((x) => x === b).length - asofs.filter((x) => x === a).length)[0];
+  const reading = (p) => `${p.label}: ${unitFmt(p.value, p.unit)} (${asOfLabel(p)})`;
+  const chg = (x) => (Math.round(x) === 0 ? "unchanged" : sgn(x, 0));
+  return {
+    week, title: "Weekly Macro Brief", date: dlong(d.meta.generated_at.slice(0, 10)), through: dlong(week),
+    bottom: `The Macro Health Gauge stands at ${f0(hd.score)} out of 100 (${hd.grade}, ${hd.word}). It has ${dir(hd.change_3m)} over the past three months (${sgn(hd.change_3m)} points). `
+      + `The strongest support is ${lc(sorted[0].label)} at ${f0(sorted[0].score)}; the biggest drag is ${lc(weak.label)} at ${f0(weak.score)}.`,
+    context: `Since 1978, months with a reading in this range (${f0(q.low)} to ${f0(q.high)}) had a recession underway or beginning within a year ${pct(q.recession_share, 0)} of the time, compared with ${pct(overall, 0)} across all months. This describes conditions; it is not a market forecast.`,
+    drivers: movers.map((f) => `${f.label} ${f.change_3m >= 0 ? "improved" : "weakened"} by ${f0(Math.abs(f.change_3m))} points over three months, to ${f0(f.score)}. ${reading(f.parts[0])}.`),
+    watch: [`${weak.label} is the weakest factor at ${f0(weak.score)}. ${weak.parts.map(reading).join("; ")}.`, ...near.filter((x) => !x.startsWith(weak.label))].slice(0, 3),
+    markets: ["SP500", "DGS10", "DGS2", "DTWEXBGS", "BAMLH0A0HYM2", "VIXCLS", "DCOILWTICO"].map(by).filter(Boolean)
+      .map((m) => ({ label: m.label + ((Date.parse(common) - Date.parse(m.as_of)) / 864e5 > 2 ? ` (as of ${dlong(m.as_of)})` : ""), level: lvl(m), week: mv(m), ytd: m.chg_ytd, kind: m.kind })),
+    scorecard: fs.map((f) => ({ label: f.label, score: f.score, grade: `${f.grade} · ${f.word}`, reading: reading(f.parts[0]), trend: f.change_3m, trendText: chg(f.change_3m) })),
+    footer: `Generated automatically on ${dlong(d.meta.generated_at.slice(0, 10))} from public data: Federal Reserve Bank of St. Louis (FRED), U.S. Bureau of Economic Analysis, U.S. Bureau of Labor Statistics, Federal Reserve Board, and Robert J. Shiller. Scores are percentiles against history known at each point in time; 50 is a historically typical reading.`,
+    disclaimer: "For informational purposes only. This is not investment advice or a recommendation to buy or sell any security. Historical relationships may not hold in the future.",
+  };
+}
+
+function briefText(b) {
+  const L = [`${b.title} | ${b.date} (data through ${b.through})`, "", "BOTTOM LINE", b.bottom, "", b.context, "", "WHAT'S DRIVING IT", ...b.drivers.map((x) => "- " + x), "",
+    "ECONOMIC SCORECARD (0-100, 50 = typical)", ...b.scorecard.map((r) => `- ${r.label}: ${f0(r.score)} (${r.grade}), 3-month change ${r.trendText}. ${r.reading}`), "",
+    "MARKETS, PAST WEEK", ...b.markets.map((m) => `- ${m.label}: ${m.level}, ${m.week} over the past week`), "",
+    "WHAT WE'RE WATCHING", ...b.watch.map((x) => "- " + x), "", b.footer, "", b.disclaimer];
+  return L.join("\n");
+}
+
+function pageBrief() {
+  const b = briefModel();
+  const page = h("div", { class: "brief-wrap" });
+  const copyBtn = h("button", { class: "btn" }, "Copy as text");
+  copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(briefText(b)); copyBtn.textContent = "Copied"; } catch (e) { copyBtn.textContent = "Copy failed"; } setTimeout(() => (copyBtn.textContent = "Copy as text"), 1600); };
+  page.append(h("div", { class: "page-head no-print" }, h("div", {}, h("div", { class: "eyebrow" }, "Client-ready · updates automatically"), h("h1", {}, "Weekly Macro Brief"),
+    h("p", {}, "A one-page summary written from the dashboard's data on every refresh. Print it to PDF or copy the text into a client email.")),
+    h("div", { class: "card-tools" }, h("button", { class: "btn", onclick: () => window.print() }, "Print / PDF"), copyBtn)));
+  const sec = (t, ...kids) => h("section", { class: "brief-sec" }, h("h2", {}, t), ...kids);
+  const sc = table([{ k: "label", label: "Factor" }, { k: "score", label: "Score", r: 1, fmt: f0 }, { k: "grade", label: "Grade" }, { k: "trend", label: "3-mo change", r: 1, fmt: (x, r) => r.trendText, cls: cls }, { k: "reading", label: "Latest reading" }], b.scorecard);
+  const mk = table([{ k: "label", label: "Market" }, { k: "level", label: "Level", r: 1 }, { k: "week", label: "Past week", r: 1 }, { k: "ytd", label: "Year to date", r: 1, fmt: (x, r) => sgn(x, r.kind === "rate" ? 0 : 1, r.kind === "rate" ? " bp" : "%"), cls: cls }], b.markets);
+  const hd = S.d.headline, [gc] = gradeInfo(hd.grade);
+  page.append(h("article", { class: "card brief" },
+    h("header", { class: "brief-top" }, h("div", {}, h("div", { class: "eyebrow" }, "Macro Health Monitor"), h("h1", {}, b.title), h("div", { class: "card-sub" }, `${b.date} · data through ${b.through}`)),
+      h("div", { class: "brief-score" }, h("div", { class: "hero-num", style: "font-size:46px" }, f0(hd.score)), h("div", {}, h("div", { class: "card-sub" }, "Health Gauge / 100"), gradePill(hd.grade, hd.word)))),
+    sec("Bottom line", h("p", {}, b.bottom), h("p", { class: "muted" }, b.context)),
+    sec("What's driving it", h("ul", {}, ...b.drivers.map((x) => h("li", {}, x)))),
+    sec("Economic scorecard", h("div", { style: "overflow-x:auto" }, sc)),
+    sec("Markets, past week", h("div", { style: "overflow-x:auto" }, mk)),
+    sec("What we're watching", h("ul", {}, ...b.watch.map((x) => h("li", {}, x)))),
+    h("footer", { class: "brief-foot" }, h("p", {}, b.footer), h("p", {}, h("b", {}, b.disclaimer)))));
+  return page;
+}
+
 /* =============================================================== ROUTER */
 function render() {
   if (!S.d) return;
@@ -537,7 +610,7 @@ function render() {
   const top = route === "factor" ? "factors" : route;
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === top));
   const app = $("#app"); app.innerHTML = "";
-  const pages = { overview: pageOverview, factors: () => pageFactor(arg), factor: () => pageFactor(arg), markets: () => pageMarkets(arg), backtest: pageBacktest, sources: () => pageSources(arg), method: pageMethod };
+  const pages = { overview: pageOverview, factors: () => pageFactor(arg), factor: () => pageFactor(arg), markets: () => pageMarkets(arg), backtest: pageBacktest, brief: pageBrief, sources: () => pageSources(arg), method: pageMethod };
   app.append((pages[route] || pageOverview)());
   if (S.route !== location.hash) window.scrollTo(0, 0);
   S.route = location.hash;

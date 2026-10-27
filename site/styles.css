@@ -172,3 +172,27 @@ table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .subnav a:hover { text-decoration: none; border-color: var(--text-3); }
 .skeleton { color: var(--text-3); padding: 60px 0; text-align: center; }
 .t tr.sel td { background: var(--surface-2); } .t tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
+
+/* weekly brief */
+.brief { max-width: 860px; margin: 0 auto; padding: 28px 32px 22px; }
+.brief-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-bottom: 2px solid var(--text); padding-bottom: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+.brief-top h1 { margin: 2px 0 0; font-size: 24px; letter-spacing: -.02em; }
+.brief-score { display: flex; align-items: center; gap: 12px; }
+.brief-sec { padding: 12px 0 4px; border-bottom: 1px solid var(--border); }
+.brief-sec h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); margin: 0 0 6px; }
+.brief-sec p, .brief-sec li { line-height: 1.6; margin: 4px 0; }
+.brief-sec ul { margin: 4px 0; padding-left: 18px; }
+.brief .muted { color: var(--text-2); }
+.brief-foot { padding-top: 12px; font-size: 11.5px; color: var(--text-3); }
+.brief-foot p { margin: 4px 0; }
+@media (max-width: 560px) { .brief { padding: 18px 16px; } }
+@media print {
+  :root { color-scheme: light; --bg: #fff; --surface: #fff; --surface-2: #f3f3f1; --border: #ddd; --text: #000; --text-2: #333; --text-3: #555; }
+  .topbar, .footer, .no-print, #status-banner { display: none !important; }
+  body { background: #fff; }
+  .page { padding: 0; max-width: none; }
+  .brief { border: 0; box-shadow: none; max-width: none; padding: 0; }
+  .t th { position: static; }
+  .brief-sec { break-inside: avoid; }
+  @page { margin: 14mm; }
+}

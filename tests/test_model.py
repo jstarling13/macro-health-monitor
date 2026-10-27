@@ -67,3 +67,12 @@ def test_drop_crisis_removes_overlapping_forward_windows():
     drop = backtest._drop_crisis(idx, "2008-09", "2008-12")
     assert drop["2007-09-30"] and drop["2008-12-31"]          # window touches the crisis
     assert not drop["2007-07-31"] and not drop["2009-01-31"]  # fully before / after
+
+
+def test_recession_odds_by_quintile():
+    idx = pd.date_range("1980-01-31", periods=200, freq="ME")
+    signal = pd.Series(np.linspace(0, 100, 200), index=idx)
+    rec = pd.Series(0.0, index=idx); rec.iloc[:40] = 1.0          # recessions only at the low end
+    ro = backtest.recession_odds(signal, rec)
+    shares = [r["recession_share"] for r in ro["rows"]]
+    assert len(shares) == 5 and shares[0] > 0.9 and shares[-1] == 0.0

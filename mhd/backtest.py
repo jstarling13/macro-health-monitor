@@ -189,3 +189,17 @@ def robustness(signal: pd.Series, mkt: pd.DataFrame, threshold: float = 45.0, se
     ci = np.percentile(boots, [2.5, 97.5])
     return {"table": pd.DataFrame(rows), "nonoverlap": {"min": min(nonover), "median": float(np.median(nonover)),
             "max": max(nonover), "years": len(d) // 12}, "bootstrap_ci": [float(ci[0]), float(ci[1])]}
+
+
+def recession_odds(signal: pd.Series, recession: pd.Series) -> dict:
+    """Share of months, by gauge quintile, with an NBER recession underway or
+    starting within the next 12 months. Descriptive, not a forecast: low
+    readings partly reflect recessions already in progress."""
+    rec = recession.reindex(signal.index).fillna(0)
+    ahead = pd.Series({t: rec.iloc[i:i + 13].max() for i, t in enumerate(signal.index) if i + 13 <= len(rec)})
+    d = pd.concat([signal.rename("s"), ahead.rename("r")], axis=1).dropna()
+    edges = d["s"].quantile([0, .2, .4, .6, .8, 1]).tolist()
+    q = pd.qcut(d["s"], 5, labels=False)
+    rows = [{"quintile": i + 1, "low": edges[i], "high": edges[i + 1], "months": int((q == i).sum()),
+             "recession_share": float(d["r"][q == i].mean())} for i in range(5)]
+    return {"rows": rows, "edges": edges}

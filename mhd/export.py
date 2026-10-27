@@ -190,6 +190,7 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
     eq_s, eq_b = (1 + s["strategy"]).cumprod(), (1 + s["stock"]).cumprod()
     fd = backtest.factor_diagnostics(m.factors.loc[start:], h, m.market)
     rb = backtest.robustness(h, m.market, threshold)
+    ro = backtest.recession_odds(h, rec)
 
     # Threshold sweep so the page can show sensitivity without recomputing.
     sweep = []
@@ -243,6 +244,7 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
                        "in_market": s["in_market"].astype(int).tolist()},
             "switches_per_year": bt["switches_per_year"],
             "sweep": sweep,
+            "recession_odds": ro,
             "robustness": {"table": _records(rb["table"].set_index("test")), "nonoverlap": rb["nonoverlap"],
                            "bootstrap_ci": rb["bootstrap_ci"]},
         },
