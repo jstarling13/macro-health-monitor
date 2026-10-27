@@ -46,4 +46,4 @@ No API keys. FRED's CSV endpoint stalls for browser-style User-Agents, so `mhd/s
 4. If the gauge really moved more than 15 points (for example after a big GDP revision), check the factor that moved, then **Run workflow** with "allow big move" ticked.
 5. Close the issue once a run succeeds.
 
-GitHub pauses scheduled workflows in public repos after 60 days with no repository activity. The daily gauge-log commit counts as activity, but if the stale banner ever appears, re-enable the workflow under **Actions**.
+GitHub disables scheduled workflows in public repos after 60 days with no repository activity. Its docs don't say whether the bot's daily gauge-log commit counts, so if the stale banner ever appears, re-enable the workflow under **Actions** (pushing any commit also resets the clock).
