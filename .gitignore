@@ -7,3 +7,4 @@ logs/
 site/data.json
 site/gauge_log.csv
 .DS_Store
+data/rejected.json

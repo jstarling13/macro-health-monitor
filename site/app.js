@@ -31,7 +31,7 @@ const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct
 const dlong = (s) => { if (!s) return "–"; const [y, m, d] = s.split("-").map(Number); return d ? `${MON[m - 1]} ${d}, ${y}` : `${MON[m - 1]} ${y}`; };
 const ym = (s) => { const [y, m] = s.split("-").map(Number); return `${MON[m - 1]} ${y}`; };
 const qtr = (s) => { const [y, m] = s.split("-").map(Number); return `Q${Math.floor((m - 1) / 3) + 1} ${y}`; };
-const asOfLabel = (p) => (["GDP", "CP", "DRT"].some((k) => p.series.startsWith(k)) || p.series === "A191RL1Q225SBEA" ? qtr(p.as_of) : (p.series.startsWith("D") || p.series === "TOTBKCR") ? dlong(p.as_of) : ym(p.as_of));
+const asOfLabel = (p) => (p.frequency === "quarterly" ? qtr(p.as_of) : p.frequency === "monthly" ? ym(p.as_of) : dlong(p.as_of));
 const unitFmt = (val, unit) => (unit === "pp" ? sgn(val, 2, " pp") : unit === "%" ? f2(val) + "%" : f2(val));
 
 function gradeInfo(g) {
@@ -45,7 +45,7 @@ const gradeOf = (s) => (!isNum(s) ? "–" : s >= 70 ? "A" : s >= 60 ? "B" : s >=
 
 /* ------------------------------------------------------------------ csv */
 function downloadCSV(name, cols, rows) {
-  const esc = (x) => { const s = x === null || x === undefined ? "" : String(x); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const esc = (x) => { let s = x === null || x === undefined ? "" : String(x); if (typeof x === "string" && /^[=+\-@]/.test(s) && isNaN(Number(s))) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const lines = [cols.map((c) => esc(c.label)).join(",")].concat(rows.map((r) => cols.map((c) => esc(r[c.k])).join(",")));
   const a = h("a", { href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })), download: name });
   document.body.append(a); a.click(); a.remove();
@@ -183,7 +183,8 @@ function pageOverview() {
     h("div", { class: "hero-score" }, h("span", { class: "hero-num" }, f0(hd.score)), h("span", { class: "hero-of" }, "/ 100"), gradePill(hd.grade, hd.word)),
     h("div", {}, h("div", { class: "meter", role: "img", "aria-label": `Gauge at ${f0(hd.score)} of 100` }, h("div", { class: "meter-mark", style: `left:${Math.max(0, Math.min(100, hd.score))}%` })),
       h("div", { class: "meter-scale" }, ...["0", "35", "45", "60", "70", "100"].map((x) => h("span", {}, x)))),
-    h("div", { class: "chips" }, ...[["1M", hd.change_1m], ["3M", hd.change_3m], ["12M", hd.change_12m]].map(([k, x]) => h("span", { class: "chip" }, `${k} `, h("b", { class: cls(x) }, sgn(x))))),
+    h("div", { class: "chips" }, ...(hd.vs_prev_run ? [h("span", { class: "chip", title: `Change since the ${dlong(hd.vs_prev_run.date)} refresh` }, "Prev. refresh ", h("b", { class: cls(hd.vs_prev_run.change) }, sgn(hd.vs_prev_run.change)))] : []),
+      ...[["1M", hd.change_1m], ["3M", hd.change_3m], ["12M", hd.change_12m]].map(([k, x]) => h("span", { class: "chip", title: "Change in the point-in-time gauge (same publication delays at both ends)" }, `${k} `, h("b", { class: cls(x) }, sgn(x))))),
     h("div", { class: "card-sub" }, "Equal-weighted average of six factor scores. Each score is a percentile against all history known at the time: 50 is a historically typical reading."));
   const tiles = h("div", { class: "grid g-tiles" });
   for (const f of d.factors) {
@@ -473,7 +474,7 @@ function pageSources(sel) {
     { k: "units", label: "Units" }, { k: "frequency", label: "Frequency" },
     { k: "last_obs", label: "Latest obs.", fmt: (x) => (x ? x.slice(0, 10) : "–") },
     { k: "fred_updated", label: "Publisher update" },
-    { k: "fetch_status", label: "This refresh", fmt: (x) => h("span", { class: "badge " + (x === "live" ? "live" : String(x).startsWith("STALE") ? "stale" : "") }, x || "–") },
+    { k: "fetch_status", label: "This refresh", fmt: (x) => h("span", { class: "badge " + (x === "live" ? "live" : /^(STALE|REJECTED)/.test(String(x)) ? "stale" : "") }, x || "–") },
     { k: "used_for", label: "Used for", fmt: (x) => h("div", {}, ...(x || []).map((u) => h("div", {}, u))) },
   ];
   const csvCols = cols.map((c) => ({ ...c, fmt: undefined })).concat([{ k: "url", label: "URL" }]);
@@ -481,7 +482,14 @@ function pageSources(sel) {
   const t = table(cols, rows, { rowClass: (r) => (r.id === sel ? "sel" : "") });
   page.append(card({ title: "Series used", sub: "Click an ID for the series page on FRED, or a publisher for the original agency.", body: h("div", { style: "overflow-x:auto" }, t),
     table: { cols: csvCols.map((c) => (c.k === "used_for" ? { k: "used_for_csv", label: "Used for" } : c)), rows: () => rows }, csv: "sources.csv" }));
-  const M = d.meta;
+  const M = d.meta, C = d.checks || { errors: [], warnings: [], passed: 0 };
+  const status = card({ title: "Data quality checks, latest refresh", sub: `Run ${C.checked_at || M.generated_at}. A failed hard check blocks publishing, so the site keeps its last good version.`,
+    body: h("div", { class: "prose", style: "max-width:none" },
+      h("p", {}, h("b", { class: C.errors.length ? "neg" : "pos" }, C.errors.length ? `${C.errors.length} failed` : "All hard checks passed"), ` · ${C.passed} checks passed · ${C.warnings.length} warning${C.warnings.length === 1 ? "" : "s"}`),
+      C.warnings.length ? h("ul", {}, ...C.warnings.map((w) => h("li", {}, w))) : h("p", {}, "No warnings."),
+      h("p", {}, "Checks include: every score is a number from 0 to 100; no gaps in recent history; each series is as recent as its schedule allows; prices are positive and rates in range; every series shown is cited; and the gauge has not jumped more than 15 points since the previous refresh without review.")) });
+  status.id = "status";
+  page.append(h("div", { class: "mt" }, status));
   page.append(h("div", { class: "grid g-2 mt" },
     card({ title: "How the data is collected", body: h("div", { class: "prose" },
       h("p", {}, "FRED series are downloaded from FRED's public CSV endpoint (fredgraph.csv), one request per series for the full history. No API key is required. Each download is checked before it replaces the saved copy; if FRED is unreachable, the last good copy is used and the series is marked STALE above."),
@@ -490,7 +498,8 @@ function pageSources(sel) {
     card({ title: "Download the data", body: h("div", { class: "prose" },
       h("p", {}, "Everything this page displays is in one file: ", h("a", { href: "data.json", download: "macro_health_data.json" }, "data.json"), ". Every chart also has a Data button and a CSV export."),
       h("p", {}, `Built ${M.generated_at.replace("T", " ")}. Latest market data ${dlong(M.latest_data)}.`)) })));
-  if (sel) queueMicrotask(() => { const r = $("tr.sel"); if (r) { r.scrollIntoView({ block: "center" }); r.querySelectorAll("td").forEach((td) => (td.style.background = "var(--surface-2)")); } });
+  if (sel === "status") queueMicrotask(() => status.scrollIntoView({ block: "start" }));
+  else if (sel) queueMicrotask(() => { const r = $("tr.sel"); if (r) { r.scrollIntoView({ block: "center" }); r.querySelectorAll("td").forEach((td) => (td.style.background = "var(--surface-2)")); } });
   return page;
 }
 
@@ -564,4 +573,19 @@ function initTheme() {
   $("#asof").textContent = `Data through ${dlong(M.latest_data)} · built ${M.generated_at.slice(0, 10)}`;
   $("#generated").textContent = `Built ${M.generated_at.replace("T", " ")} UTC`;
   render();
+  banner();
 })();
+
+/** Top-of-page notice when data is old or the last build raised warnings. */
+function banner() {
+  const M = S.d.meta, C = S.d.checks || { warnings: [] };
+  const ageDays = (Date.now() - Date.parse(M.generated_at.replace("Z", ":00Z"))) / 864e5;
+  const old = $("#status-banner"); if (old) old.remove();
+  let msg = null, warn = false;
+  if (ageDays > 3) { msg = `This data was last refreshed ${Math.floor(ageDays)} days ago (${dlong(M.generated_at.slice(0, 10))}). The daily update may have stopped.`; warn = true; }
+  else if (C.warnings.length) msg = `${C.warnings.length} data note${C.warnings.length > 1 ? "s" : ""} from the latest refresh.`;
+  if (!msg) return;
+  const b = h("div", { id: "status-banner", class: "callout" + (warn ? " warn" : ""), style: "max-width:1320px;margin:12px auto 0;width:calc(100% - 40px)" },
+    h("b", {}, warn ? "Stale data. " : "Heads up. "), msg, " ", h("a", { href: "#sources/status" }, "Details"));
+  $("main").before(b);
+}

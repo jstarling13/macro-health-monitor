@@ -78,6 +78,18 @@ def _parse_fred(raw: bytes, sid: str) -> pd.Series:
     return s
 
 
+def _shrunk(old: pd.Series, new: pd.Series) -> str | None:
+    """Reasons a fresh download looks worse than the copy we already have.
+    Guards against truncated or partial responses replacing good history."""
+    if len(new) < 0.98 * len(old):
+        return f"only {len(new)} rows vs {len(old)} cached"
+    if new.index[0] > old.index[0] + pd.Timedelta(days=40):
+        return f"history now starts {new.index[0].date()} instead of {old.index[0].date()}"
+    if new.index[-1] < old.index[-1] - pd.Timedelta(days=7):
+        return f"latest date went backwards to {new.index[-1].date()} from {old.index[-1].date()}"
+    return None
+
+
 def fred(sid: str, offline: bool = False) -> pd.Series:
     """Full history of one FRED series, indexed by FRED's observation date."""
     path = CACHE / f"{sid}.csv"
@@ -85,13 +97,21 @@ def fred(sid: str, offline: bool = False) -> pd.Series:
         try:
             raw = _get(FRED_CSV.format(sid=sid))
             s = _parse_fred(raw, sid)  # validate before overwriting cache
+            if path.exists():
+                problem = _shrunk(_parse_fred(path.read_bytes(), sid), s)
+                if problem:
+                    raise ValueError(f"{sid}: new download rejected, {problem}")
             path.write_bytes(raw)
             LOG.add(sid, "live", s.index[-1].date(), len(s))
             return s
         except Exception as e:
             if not path.exists():
                 raise
-            LOG.add(sid, f"STALE cache ({type(e).__name__})", None, None)
+            reason = str(e).split("rejected, ")[-1] if "rejected" in str(e) else type(e).__name__
+            cached = _parse_fred(path.read_bytes(), sid)
+            LOG.add(sid, f"{'REJECTED' if 'rejected' in str(e) else 'STALE'}: using saved copy ({reason})",
+                    cached.index[-1].date(), len(cached))
+            return cached
     s = _parse_fred(path.read_bytes(), sid)
     if not LOG.rows or LOG.rows[-1]["series"] != sid:
         LOG.add(sid, "cache", s.index[-1].date(), len(s))

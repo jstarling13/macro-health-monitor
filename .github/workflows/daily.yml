@@ -1,12 +1,19 @@
 name: Daily rebuild
 
-# Pulls fresh FRED + Shiller data, rebuilds site/data.json, runs the tests,
-# records today's gauge reading, and publishes site/ to GitHub Pages.
+# Pulls fresh FRED + Shiller data, rebuilds site/data.json behind a set of
+# publish checks (mhd/validate.py), runs the tests, records today's gauge
+# reading, and publishes site/ to GitHub Pages. If anything fails, nothing is
+# published (the live site keeps its last good version) and an issue is opened.
 on:
   schedule:
     - cron: "30 11 * * *"     # every day 11:30 UTC (7:30 AM ET in summer, 6:30 AM in winter)
     - cron: "30 22 * * 1-5"   # weekdays 22:30 UTC, after FRED posts the day's market closes
   workflow_dispatch:
+    inputs:
+      allow_big_move:
+        description: "I checked: the gauge's big move since the last refresh is real"
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -14,6 +21,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  issues: write
 
 concurrency:
   group: pages
@@ -22,6 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -33,21 +42,24 @@ jobs:
 
       - run: pip install -r requirements-ci.txt
 
-      # Keep the last good downloads between runs, so a FRED outage serves
-      # yesterday's data (marked STALE on the Sources page) instead of failing.
+      # Last good downloads, used only if FRED is down or returns bad data.
       - uses: actions/cache@v4
         with:
           path: data/cache
           key: data-cache-${{ github.run_id }}
           restore-keys: data-cache-
 
-      - name: Build data.json
+      - name: Tests (before touching data)
+        run: python -m pytest -q
+
+      - name: Build data.json behind publish checks
         env:
           MHD_MAX_AGE_HOURS: "0"        # always download fresh data
           MHD_META_MAX_AGE_HOURS: "0"   # and fresh source citations
+          MHD_ALLOW_BIG_MOVE: ${{ inputs.allow_big_move && '1' || '0' }}
         run: python -W ignore -m mhd.export
 
-      - name: Tests
+      - name: Tests (on the built data)
         run: python -m pytest -q
 
       - name: Record today's gauge reading
@@ -56,7 +68,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/history/gauge_log.csv
-          git diff --cached --quiet || (git commit -m "Gauge log $(date -u +%Y-%m-%d) [skip ci]" && git push)
+          if ! git diff --cached --quiet; then
+            git commit -m "Gauge log $(date -u +%Y-%m-%d) [skip ci]"
+            for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 5; done
+          fi
 
       - run: cp data/history/gauge_log.csv site/gauge_log.csv
 
@@ -64,6 +79,25 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+      - name: Keep the rejected build for inspection
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rejected-build
+          path: data/rejected.json
+          if-no-files-found: ignore
+
+      - name: Open an alert issue
+        if: failure() && github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Daily rebuild failed - site not updated"
+          body="The $(date -u +%Y-%m-%d) refresh did not publish. The live site still shows the last good data. Details: $RUN_URL"
+          num=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number')
+          if [ -n "$num" ]; then gh issue comment "$num" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
 
   deploy:
     needs: build

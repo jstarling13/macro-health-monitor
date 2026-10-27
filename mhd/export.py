@@ -14,7 +14,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import backtest, meta, model, sources
+import sys
+
+from . import backtest, meta, model, sources, validate
 
 SITE = Path(__file__).resolve().parent.parent / "site"
 
@@ -62,6 +64,10 @@ def _records(df: pd.DataFrame) -> list[dict]:
 
 
 # Daily market monitor. kind: "rate" -> changes in basis points; "level" -> %.
+# Reporting frequency used for date labels on the site.
+FREQ = {"A191RL1Q225SBEA": "quarterly", "CP": "quarterly", "DRTSCILM": "quarterly",
+        "TOTBKCR": "weekly", "DTWEXBGS": "daily"}
+
 DAILY = [
     ("SP500", "S&P 500", "level", "index"),
     ("NASDAQCOM", "Nasdaq Composite", "level", "index"),
@@ -109,6 +115,15 @@ def daily_markets(offline: bool) -> list[dict]:
     return out
 
 
+def previous_run(today: str) -> dict | None:
+    """Most recent gauge-log row from an earlier day."""
+    if not LOG_PATH.exists():
+        return None
+    df = pd.read_csv(LOG_PATH)
+    df = df[df["date"] < today]
+    return None if df.empty else df.iloc[-1].to_dict()
+
+
 def append_log(payload: dict) -> pd.DataFrame:
     """One row per run-day: the gauge as published that day. Builds the
     day-over-day record that a daily tool needs."""
@@ -144,12 +159,13 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
             obs = raw[sid].dropna().index[-1]
             parts.append({"key": c.key, "label": label, "unit": unit, "value": val,
                           "score": p["score"], "series": sid, "as_of": obs,
+                          "frequency": FREQ.get(sid, "monthly"),
                           "direction": BETTER[c.key]})
         hist = m.factors[f.key].loc[start:]
         fg, fw = model.grade(L[f.key]["score"])
         factors.append({"key": f.key, "label": f.label, "why": f.why, "score": L[f.key]["score"],
                         "grade": fg, "word": fw, "parts": parts,
-                        "change_3m": L[f.key]["score"] - hist.iloc[-4] if len(hist) > 4 else None})
+                        "change_3m": hist.iloc[-1] - hist.iloc[-4] if len(hist) > 4 else None})
 
     core_m = core.groupby(core.index.to_period("M")).last()
     core_m.index = core_m.index.to_timestamp()
@@ -196,8 +212,11 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
         "headline": {
             "score": L["_health"], "grade": hg, "word": hw,
             "pit_series_last": h.iloc[-1],
-            "change_1m": L["_health"] - h.iloc[-2], "change_3m": L["_health"] - h.iloc[-4],
-            "change_12m": L["_health"] - h.iloc[-13],
+            # Changes compare the point-in-time gauge with itself. Comparing
+            # today's newest-data reading with past point-in-time readings
+            # mixed two bases (e.g. the dollar showed -22 when it rose +5).
+            "change_1m": h.iloc[-1] - h.iloc[-2], "change_3m": h.iloc[-1] - h.iloc[-4],
+            "change_12m": h.iloc[-1] - h.iloc[-13],
         },
         "factors": factors,
         "history": {
@@ -251,10 +270,10 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
                   sources.fred(sid, True).index[-1]})
         cites.append(r)
     sh = dict(meta.SHILLER)
-    sh.update({"used_for": ["S&P 500 monthly prices and dividends, 1871 onward (backtest returns)"],
+    sh.update({"used_for": [f"S&P 500 monthly prices to {m.market.attrs['fred_splice_start'] - pd.offsets.MonthEnd(1):%b %Y} "
+                            f"and dividends to {m.market.attrs['dividends_estimated_after']:%b %Y} (backtest returns)"],
                "fetch_status": status.get("SHILLER", {}).get("status"),
-               "last_obs": (m.market.attrs["fred_splice_start"] - pd.offsets.MonthEnd(1))
-               if m.market.attrs.get("fred_splice_start") is not None else None})
+               "last_obs": sources.shiller(True)["P"].index[-1]})
     cites.append(sh)
     payload["sources"] = cites
     payload["meta"]["latest_data"] = max(mk["as_of"] for mk in payload["markets"])
@@ -266,13 +285,32 @@ def main():
     ap.add_argument("--offline", action="store_true")
     a = ap.parse_args()
     payload = build_payload(offline=a.offline)
+    today = datetime.now().strftime("%Y-%m-%d")
+    prev = previous_run(today)
+    checks = validate.run(payload, prev)
+    payload["checks"] = checks
+    if prev:
+        payload["headline"]["vs_prev_run"] = {"date": prev["date"], "change": payload["headline"]["score"] - prev["health"]}
+    SITE.mkdir(exist_ok=True)
+    if not checks["ok"]:
+        # Keep the last good data.json and gauge log untouched.
+        bad = SITE.parent / "data" / "rejected.json"
+        bad.parent.mkdir(exist_ok=True)
+        bad.write_text(json.dumps(_clean(payload), indent=1))
+        print("PUBLISH BLOCKED. Failed checks:", *[f"  - {e}" for e in checks["errors"]], sep="\n")
+        print(f"Rejected build saved to {bad}; site/data.json left unchanged.")
+        sys.exit(1)
     log = append_log(payload)
     payload["gauge_log"] = _records(log.set_index("date"))
-    SITE.mkdir(exist_ok=True)
     out = SITE / "data.json"
-    out.write_text(json.dumps(payload, separators=(",", ":")))
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_clean(payload), separators=(",", ":")))
+    tmp.replace(out)  # atomic: a crash mid-write can't leave a half-written file
     print(f"wrote {out} ({out.stat().st_size/1024:.0f} KB); gauge {payload['headline']['score']:.1f} "
-          f"{payload['headline']['grade']}; latest data {payload['meta']['latest_data']}")
+          f"{payload['headline']['grade']}; latest data {payload['meta']['latest_data']}; "
+          f"checks: {checks['passed']} passed, {len(checks['warnings'])} warnings")
+    for w in checks["warnings"]:
+        print(f"  warning: {w}")
 
 
 if __name__ == "__main__":
