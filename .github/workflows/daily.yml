@@ -1,0 +1,73 @@
+name: Daily rebuild
+
+# Pulls fresh FRED + Shiller data, rebuilds site/data.json, runs the tests,
+# records today's gauge reading, and publishes site/ to GitHub Pages.
+on:
+  schedule:
+    - cron: "30 11 * * *"     # every day 11:30 UTC (7:30 AM ET in summer, 6:30 AM in winter)
+    - cron: "30 22 * * 1-5"   # weekdays 22:30 UTC, after FRED posts the day's market closes
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - run: pip install -r requirements-ci.txt
+
+      # Keep the last good downloads between runs, so a FRED outage serves
+      # yesterday's data (marked STALE on the Sources page) instead of failing.
+      - uses: actions/cache@v4
+        with:
+          path: data/cache
+          key: data-cache-${{ github.run_id }}
+          restore-keys: data-cache-
+
+      - name: Build data.json
+        run: python -W ignore -m mhd.export
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Record today's gauge reading
+        if: github.event_name != 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/history/gauge_log.csv
+          git diff --cached --quiet || (git commit -m "Gauge log $(date -u +%Y-%m-%d) [skip ci]" && git push)
+
+      - run: cp data/history/gauge_log.csv site/gauge_log.csv
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
