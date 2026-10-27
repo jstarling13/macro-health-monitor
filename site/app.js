@@ -578,19 +578,156 @@ function briefText(b) {
   return L.join("\n");
 }
 
-function pageBrief() {
-  const b = briefModel();
+/* ----- client view: plain English + graphics ----- */
+const ICONS = {
+  gdp: '<polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>',
+  fed: '<path d="M3 21h18M5 21V11M19 21V11M9.5 21V11M14.5 21V11M2 10.5 12 4l10 6.5z"/>',
+  inflation: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  earnings: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/>',
+  usd: '<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  credit: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>', down: '<path d="M12 5v14M19 12l-7 7-7-7"/>', flat: '<path d="M5 12h14"/>',
+};
+const icon = (k, size = 20) => { const e = document.createElementNS("http://www.w3.org/2000/svg", "svg"); e.setAttribute("viewBox", "0 0 24 24"); e.setAttribute("width", size); e.setAttribute("height", size);
+  e.setAttribute("fill", "none"); e.setAttribute("stroke", "currentColor"); e.setAttribute("stroke-width", "1.8"); e.setAttribute("stroke-linecap", "round"); e.setAttribute("stroke-linejoin", "round"); e.setAttribute("aria-hidden", "true"); e.innerHTML = ICONS[k]; return e; };
+
+// Client scale (plain words, no letter grades).
+const TIERS = [[70, "Strong", "--good"], [55, "Good", "--good"], [45, "Average", "--neutral"], [25, "Below average", "--warning"], [0, "Weak", "--critical"]];
+const tierOf = (s) => TIERS.find(([c]) => s >= c) || TIERS[TIERS.length - 1];
+const tIdx = (s) => TIERS.indexOf(tierOf(s));   // 0 strong ... 4 weak
+const pick = (s, arr) => arr[tIdx(s)];
+const trendWord = (x) => (x > 3 ? ["Improving", "up"] : x < -3 ? ["Weakening", "down"] : ["Steady", "flat"]);
+
+function clientModel() {
+  const d = S.d, hd = d.headline, F = Object.fromEntries(d.factors.map((f) => [f.key, f]));
+  const P = (f, k) => F[f].parts.find((p) => p.key === k) || {};
+  const n2 = (x) => Math.abs(x).toFixed(1);
+  const ffc = P("fed", "ff_change_6m").value, sl = P("credit", "sloos").value, bc = P("credit", "bank_credit_yoy").value;
+  const cpi = P("inflation", "core_cpi_gap").value, gdp = P("gdp", "gdp_growth").value, prof = P("earnings", "profits_yoy").value, usd = P("usd", "usd_6m").value;
+  const areas = [
+    { key: "gdp", name: "Economic growth", text: `The economy grew at a ${f1(gdp)}% yearly pace last quarter, ${pick(F.gdp.score, ["well above its usual pace.", "a bit faster than usual.", "close to its usual pace.", "somewhat slower than usual.", "well below its usual pace."])}` },
+    { key: "fed", name: "Interest rates", text: `${pick(F.fed.score, ["Rates are low or falling, which supports borrowing and spending.", "Rate policy is mildly supportive.", "Rate policy is roughly neutral.", "Rates lean restrictive, which can slow borrowing.", "Rates are high or rising, a headwind for borrowing."])} Over six months the Fed's key rate ${ffc > 0.05 ? `rose ${f2(ffc)} points` : ffc < -0.05 ? `fell ${f2(-ffc)} points` : "held steady"}.` },
+    { key: "inflation", name: "Inflation", text: `Prices are rising ${f1(cpi)}% a year, excluding food and energy, ${Math.abs(cpi - 2) < 0.35 ? "right around" : cpi > 2 ? "above" : "below"} the Fed's 2% goal.` },
+    { key: "earnings", name: "Company profits", text: `Corporate profits are ${prof >= 0 ? "up" : "down"} ${n2(prof)}% from a year ago, ${pick(F.earnings.score, ["strong growth.", "solid growth.", "about normal.", "softer than usual.", "a weak showing."])}` },
+    { key: "usd", name: "The dollar", text: `The dollar has ${usd >= 0 ? "risen" : "fallen"} ${n2(usd)}% over six months. ${usd >= 1.5 ? "A stronger dollar can weigh on U.S. companies that sell abroad." : usd <= -1.5 ? "A softer dollar helps U.S. companies that sell abroad." : "That is a fairly normal move."}` },
+    { key: "credit", name: "Lending", text: `Banks are ${sl > 2 ? "tightening" : sl < -2 ? "easing" : "holding steady on"} their lending standards, and total bank lending is up ${f1(bc)}% from a year ago. ${pick(F.credit.score, ["Credit is flowing freely.", "Credit conditions are healthy.", "Credit conditions are about normal.", "Credit is a little tighter than usual.", "Credit is tight."])}` },
+  ].map((a) => ({ ...a, score: F[a.key].score, tier: tierOf(F[a.key].score), trend: trendWord(F[a.key].change_3m) }));
+  const by = (k) => d.markets.find((m) => m.id === k);
+  const asofs = d.markets.map((m) => m.as_of), common = asofs.slice().sort((a, b) => asofs.filter((x) => x === b).length - asofs.filter((x) => x === a).length)[0];
+  const old = (m) => ((Date.parse(common) - Date.parse(m.as_of)) / 864e5 > 2 ? ` (as of ${dlong(m.as_of)})` : "");
+  const dirw = (x, up, dn) => (x > 0 ? up : dn);
+  const sp = by("SP500"), t10 = by("DGS10"), oil = by("DCOILWTICO"), vix = by("VIXCLS"), dx = by("DTWEXBGS");
+  const markets = [
+    { k: "Stocks", sub: "S&P 500", chg: sp.chg_1w, text: `${dirw(sp.chg_1w, "Rose", "Fell")} ${n2(sp.chg_1w)}% this week${old(sp)}; ${sp.chg_ytd >= 0 ? "up" : "down"} ${n2(sp.chg_ytd)}% this year.` },
+    { k: "Interest rates", sub: "10-year Treasury", chg: t10.chg_1w, text: `${f2(t10.last)}%, ${dirw(t10.chg_1w, "up", "down")} ${f2(Math.abs(t10.chg_1w) / 100)} points this week${old(t10)}. This rate influences mortgage and loan rates.` },
+    { k: "Oil", sub: "WTI crude", chg: oil.chg_1w, text: `$${f2(oil.last)} a barrel, ${dirw(oil.chg_1w, "up", "down")} ${n2(oil.chg_1w)}% this week${old(oil)}.` },
+    { k: "Market nerves", sub: "VIX index", chg: vix.chg_1w, text: `${f1(vix.last)}, ${vix.last < 20 ? "a calm level" : vix.last < 30 ? "somewhat elevated" : "a nervous level"}; ${dirw(vix.chg_1w, "up", "down")} ${n2(vix.chg_1w)}% this week${old(vix)}.` },
+    { k: "The dollar", sub: "Broad index", chg: dx.chg_1w, text: `${dirw(dx.chg_1w, "Up", "Down")} ${n2(dx.chg_1w)}% this week${old(dx)}.` },
+  ];
+  const better = areas.filter((a) => a.trend[1] === "up").map((a) => a.name), worse = areas.filter((a) => a.trend[1] === "down").map((a) => a.name);
+  const ht = tierOf(hd.score);
+  return {
+    date: dlong(d.meta.generated_at.slice(0, 10)), through: dlong(common), score: hd.score, tier: ht,
+    headline: pick(hd.score, ["The economy is in strong shape overall.", "The economy is in good shape overall.", "The economy is in average shape: some areas are strong while others are soft.", "The economy is somewhat softer than usual.", "The economy is under strain."]),
+    detail: `${areas.slice().sort((a, b) => b.score - a.score)[0].name} ${areas.slice().sort((a, b) => b.score - a.score)[0].name.endsWith("s") ? "are" : "is"} the brightest spot, while ${areas.slice().sort((a, b) => a.score - b.score)[0].name.toLowerCase()} ${areas.slice().sort((a, b) => a.score - b.score)[0].name.endsWith("s") ? "are" : "is"} the softest.`,
+    areas, markets, better, worse,
+  };
+}
+
+function gaugeSVG(score, size = 220) {
+  const W = size, H = size * 0.58, cx = W / 2, cy = H - 8, r = W / 2 - 14, sw = 16;
+  const pt = (v) => { const a = Math.PI * (1 - v / 100); return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; };
+  const arc = (a, b) => { const [x1, y1] = pt(a), [x2, y2] = pt(b); return `M${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 0 1 ${x2.toFixed(1)},${y2.toFixed(1)}`; };
+  const zones = [[0, 25, "--critical"], [25, 45, "--warning"], [45, 55, "--neutral"], [55, 70, "#6fc46f"], [70, 100, "--good"]];
+  const [nx, ny] = pt(Math.max(0, Math.min(100, score)));
+  const c = (z) => (z.startsWith("--") ? `var(${z})` : z);
+  const e = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  e.setAttribute("viewBox", `0 0 ${W} ${H}`); e.setAttribute("width", W); e.setAttribute("height", H); e.setAttribute("role", "img"); e.setAttribute("aria-label", `Gauge at ${Math.round(score)} of 100`);
+  e.innerHTML = zones.map(([a, b, z]) => `<path d="${arc(a + 0.6, b - 0.6)}" stroke="${c(z)}" stroke-width="${sw}" fill="none" opacity="0.9"/>`).join("")
+    + `<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="var(--text)" stroke-width="3.5" stroke-linecap="round"/><circle cx="${cx}" cy="${cy}" r="7" fill="var(--text)"/>`
+    + `<text x="14" y="${H - 1}" font-size="10" fill="var(--text-3)">0</text><text x="${W - 26}" y="${H - 1}" font-size="10" fill="var(--text-3)">100</text>`;
+  return e;
+}
+
+function pageBriefClient() {
+  const c = clientModel(), B = S.brand;
+  const sec = (t, ...kids) => h("section", { class: "cb-sec" }, h("h2", {}, t), ...kids);
+  const art = h("article", { class: "card cb" });
+  art.append(h("header", { class: "cb-mast" },
+    B && B.logo ? h("img", { src: B.logo, alt: B.firm, class: "cb-logo" }) : h("div", { class: "brand", style: "pointer-events:none" }, h("span", {}, "Macro Health Monitor")),
+    h("div", { class: "cb-mast-r" }, h("div", { class: "cb-kicker" }, "Weekly Economic Update"), h("div", { class: "card-sub" }, c.date))));
+  if (B && B.sample_label) art.append(h("div", { class: "cb-sample" }, B.sample_label));
+
+  art.append(h("section", { class: "cb-hero" },
+    h("div", { class: "cb-dial" }, gaugeSVG(c.score), h("div", { class: "cb-dial-num" }, f0(c.score), h("span", {}, "/100")), h("div", { class: "cb-pill", style: `--tc:var(${c.tier[2]})` }, c.tier[1])),
+    h("div", { class: "cb-hero-txt" }, h("div", { class: "eyebrow" }, "The big picture"), h("p", { class: "cb-lead" }, c.headline), h("p", {}, c.detail),
+      h("p", { class: "cb-note" }, "Our Economic Health Score combines six areas of the economy into one number from 0 to 100. A score of 50 is a typical reading by historical standards."))));
+
+  const grid = h("div", { class: "cb-grid" }, ...c.areas.map((a) => h("div", { class: "cb-area" },
+    h("div", { class: "cb-area-top" }, h("span", { class: "cb-ico", style: `color:var(${FCOL[a.key]})` }, icon(a.key)), h("b", {}, a.name),
+      h("span", { class: "cb-pill sm", style: `--tc:var(${a.tier[2]})` }, a.tier[1])),
+    h("div", { class: "cb-bar", "aria-hidden": "true" }, h("i", { style: `width:${Math.max(3, a.score)}%;background:var(${a.tier[2]})` })),
+    h("p", {}, a.text),
+    h("div", { class: "cb-trend " + a.trend[1] }, icon(a.trend[1], 14), `${a.trend[0]} over 3 months`))));
+  art.append(sec("The economy at a glance", grid));
+
+  if (c.better.length || c.worse.length) art.append(sec("What changed over the last three months", h("div", { class: "cb-changes" },
+    h("div", {}, h("div", { class: "cb-ch-h up" }, icon("up", 14), "Getting better"), h("p", {}, c.better.join(", ") || "None")),
+    h("div", {}, h("div", { class: "cb-ch-h down" }, icon("down", 14), "Getting weaker"), h("p", {}, c.worse.join(", ") || "None")))));
+
+  art.append(sec("Markets this week", h("div", { class: "cb-mkts" }, ...c.markets.map((m) => {
+    const dir = m.chg > 0.0001 ? "up" : m.chg < -0.0001 ? "down" : "flat";
+    return h("div", { class: "cb-mkt" }, h("div", { class: "cb-mkt-h" }, h("span", { class: "cb-arrow " + dir }, icon(dir, 16)), h("b", {}, m.k), h("span", { class: "card-sub" }, m.sub)), h("p", {}, m.text));
+  }))));
+
+  const chartBox = h("div", { class: "chart sm", style: "height:200px" });
+  art.append(sec("Our Economic Health Score over the past five years", chartBox, h("p", { class: "cb-note" }, "Monthly readings, each using only the data published by that month. Shaded band: the typical range (45 to 55).")));
+  const H = S.d.history, n = 60, ds = H.dates.slice(-n), hs = H.health.slice(-n);
+  queueMicrotask(() => mount(chartBox, () => base({ grid: { left: 34, right: 10, top: 10, bottom: 24 }, tooltip: { ...base().tooltip, formatter: (p) => tipRows(p, f0) },
+    yAxis: { ...base().yAxis, min: 0, max: 100, interval: 25 },
+    series: [line("Score", pairs(ds, hs), v("--brief-accent") || v("--brand"), { areaStyle: { color: v("--brief-accent") || v("--brand"), opacity: 0.08 },
+      markArea: { silent: true, itemStyle: { color: v("--neutral"), opacity: 0.12 }, data: [[{ yAxis: 45 }, { yAxis: 55 }]] } })] })));
+
+  art.append(h("section", { class: "cb-means" }, h("h2", {}, "What this means for you"),
+    h("p", {}, "This update describes current economic conditions. It is not a forecast of the stock market, and economic news alone is rarely a reason to change a long-term plan. "
+      + (B && B.contact_line ? B.contact_line : "If you have questions about how the economy affects your plan, talk with your financial advisor."))));
+  art.append(h("footer", { class: "brief-foot" },
+    h("p", {}, `Sources: Federal Reserve Bank of St. Louis (FRED), U.S. Bureau of Economic Analysis, U.S. Bureau of Labor Statistics, Federal Reserve Board. Market data through ${c.through}. Prepared automatically from public data.`),
+    h("p", {}, h("b", {}, "For informational purposes only. This is not investment advice or a recommendation to buy or sell any security. Past economic relationships may not hold in the future.")),
+    B && B.disclosure ? h("p", {}, B.disclosure) : null));
+  return art;
+}
+
+function clientText() {
+  const c = clientModel();
+  return [`Weekly Economic Update | ${c.date}`, "", `THE BIG PICTURE: Economic Health Score ${f0(c.score)}/100 (${c.tier[1]})`, c.headline + " " + c.detail, "",
+    "THE ECONOMY AT A GLANCE", ...c.areas.map((a) => `- ${a.name} (${a.tier[1]}, ${a.trend[0].toLowerCase()}): ${a.text}`), "",
+    "MARKETS THIS WEEK", ...c.markets.map((m) => `- ${m.k}: ${m.text}`), "",
+    "WHAT THIS MEANS FOR YOU", "This update describes current economic conditions. It is not a forecast of the stock market, and economic news alone is rarely a reason to change a long-term plan.", "",
+    "For informational purposes only. Not investment advice."].join("\n");
+}
+
+function pageBrief(arg) {
+  const view = arg === "analyst" ? "analyst" : "client";
   const page = h("div", { class: "brief-wrap" });
   const copyBtn = h("button", { class: "btn" }, "Copy as text");
-  copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(briefText(b)); copyBtn.textContent = "Copied"; } catch (e) { copyBtn.textContent = "Copy failed"; } setTimeout(() => (copyBtn.textContent = "Copy as text"), 1600); };
-  page.append(h("div", { class: "page-head no-print" }, h("div", {}, h("div", { class: "eyebrow" }, "Client-ready · updates automatically"), h("h1", {}, "Weekly Macro Brief"),
-    h("p", {}, "A one-page summary written from the dashboard's data on every refresh. Print it to PDF or copy the text into a client email.")),
-    h("div", { class: "card-tools" }, h("button", { class: "btn", onclick: () => window.print() }, "Print / PDF"), copyBtn)));
+  copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(view === "client" ? clientText() : briefText(briefModel())); copyBtn.textContent = "Copied"; } catch (e) { copyBtn.textContent = "Copy failed"; } setTimeout(() => (copyBtn.textContent = "Copy as text"), 1600); };
+  const seg = h("div", { class: "seg" }, h("button", { "aria-pressed": String(view === "client"), onclick: () => (location.hash = "#brief") }, "Client version"),
+    h("button", { "aria-pressed": String(view === "analyst"), onclick: () => (location.hash = "#brief/analyst") }, "Analyst version"));
+  page.append(h("div", { class: "page-head no-print" }, h("div", {}, h("div", { class: "eyebrow" }, "Client-ready · updates automatically"), h("h1", {}, "Weekly Brief"),
+    h("p", {}, "Written from the dashboard's data on every refresh. The client version is in plain English; the analyst version has the full detail. Print to PDF or copy the text into an email.")),
+    h("div", { class: "card-tools", style: "align-items:center" }, seg, h("button", { class: "btn", onclick: () => window.print() }, "Print / PDF"), copyBtn)));
+  page.append(view === "client" ? pageBriefClient() : pageBriefAnalyst());
+  return page;
+}
+
+function pageBriefAnalyst() {
+  const b = briefModel();
   const sec = (t, ...kids) => h("section", { class: "brief-sec" }, h("h2", {}, t), ...kids);
   const sc = table([{ k: "label", label: "Factor" }, { k: "score", label: "Score", r: 1, fmt: f0 }, { k: "grade", label: "Grade" }, { k: "trend", label: "3-mo change", r: 1, fmt: (x, r) => r.trendText, cls: cls }, { k: "reading", label: "Latest reading" }], b.scorecard);
   const mk = table([{ k: "label", label: "Market" }, { k: "level", label: "Level", r: 1 }, { k: "week", label: "Past week", r: 1 }, { k: "ytd", label: "Year to date", r: 1, fmt: (x, r) => sgn(x, r.kind === "rate" ? 0 : 1, r.kind === "rate" ? " bp" : "%"), cls: cls }], b.markets);
-  const hd = S.d.headline, [gc] = gradeInfo(hd.grade);
-  page.append(h("article", { class: "card brief" },
+  const hd = S.d.headline;
+  return h("article", { class: "card brief" },
     h("header", { class: "brief-top" }, h("div", {}, h("div", { class: "eyebrow" }, "Macro Health Monitor"), h("h1", {}, b.title), h("div", { class: "card-sub" }, `${b.date} · data through ${b.through}`)),
       h("div", { class: "brief-score" }, h("div", { class: "hero-num", style: "font-size:46px" }, f0(hd.score)), h("div", {}, h("div", { class: "card-sub" }, "Health Gauge / 100"), gradePill(hd.grade, hd.word)))),
     sec("Bottom line", h("p", {}, b.bottom), h("p", { class: "muted" }, b.context)),
@@ -598,8 +735,7 @@ function pageBrief() {
     sec("Economic scorecard", h("div", { style: "overflow-x:auto" }, sc)),
     sec("Markets, past week", h("div", { style: "overflow-x:auto" }, mk)),
     sec("What we're watching", h("ul", {}, ...b.watch.map((x) => h("li", {}, x)))),
-    h("footer", { class: "brief-foot" }, h("p", {}, b.footer), h("p", {}, h("b", {}, b.disclaimer)))));
-  return page;
+    h("footer", { class: "brief-foot" }, h("p", {}, b.footer), h("p", {}, h("b", {}, b.disclaimer))));
 }
 
 /* =============================================================== ROUTER */
@@ -610,7 +746,7 @@ function render() {
   const top = route === "factor" ? "factors" : route;
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.route === top));
   const app = $("#app"); app.innerHTML = "";
-  const pages = { overview: pageOverview, factors: () => pageFactor(arg), factor: () => pageFactor(arg), markets: () => pageMarkets(arg), backtest: pageBacktest, brief: pageBrief, sources: () => pageSources(arg), method: pageMethod };
+  const pages = { overview: pageOverview, factors: () => pageFactor(arg), factor: () => pageFactor(arg), markets: () => pageMarkets(arg), backtest: pageBacktest, brief: () => pageBrief(arg), sources: () => pageSources(arg), method: pageMethod };
   app.append((pages[route] || pageOverview)());
   if (S.route !== location.hash) window.scrollTo(0, 0);
   S.route = location.hash;
@@ -642,6 +778,7 @@ function initTheme() {
     $("#app").innerHTML = ""; $("#app").append(h("div", { class: "callout warn" }, "Couldn't load data.json. Run `python -m mhd.export` to build it."));
     return;
   }
+  if (/[?&]brand\b/.test(location.search)) try { const br = await fetch("brand.json", { cache: "no-cache" }); if (br.ok) { S.brand = await br.json(); if (S.brand.accent) document.documentElement.style.setProperty("--brief-accent", S.brand.accent); } } catch (e) {}
   const M = S.d.meta;
   $("#asof").textContent = `Data through ${dlong(M.latest_data)} · built ${M.generated_at.slice(0, 10)}`;
   $("#generated").textContent = `Built ${M.generated_at.replace("T", " ")} UTC`;

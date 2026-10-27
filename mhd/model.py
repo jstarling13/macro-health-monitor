@@ -271,6 +271,7 @@ class Model:
     market: pd.DataFrame
     latest: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)
+    recent: pd.DataFrame | None = None
 
 
 def build(offline: bool = False, weights: dict | None = None, start: str = "1960-01-31") -> Model:
@@ -299,4 +300,24 @@ def build(offline: bool = False, weights: dict | None = None, start: str = "1960
     tot = sum(w[k] for k in latest if not np.isnan(latest[k]["score"]) and w[k] > 0)
     latest["_health"] = sum(latest[k]["score"] * w[k] for k in w
                             if not np.isnan(latest[k]["score"]) and w[k] > 0) / tot
-    return Model(comps, fs, health, mkt, latest, raw)
+    return Model(comps, fs, health, mkt, latest, raw, recent_scores(comps, now, weights))
+
+
+def recent_scores(comps: pd.DataFrame, now: pd.DataFrame, weights: dict | None = None,
+                  months: int = 25) -> pd.DataFrame:
+    """Factor scores and gauge for recent month-ends on the SAME basis as
+    today's reading: newest data for each period, scored against the
+    point-in-time history up to that month. All "change over N months"
+    figures use this, so they compare like with like. (The point-in-time
+    series, with conservative publication lags, is kept for the backtest.)"""
+    w = {f.key: (weights or {}).get(f.key, f.weight) for f in FACTORS}
+    rows = {}
+    for t in now.index[-months:]:
+        row = {}
+        for f in FACTORS:
+            sc = [score_against(comps[c.key].loc[:t], now[c.key].loc[t]) for c in f.components]
+            row[f.key] = np.nanmean(sc) if not all(np.isnan(sc)) else np.nan
+        ok = {k: v for k, v in row.items() if not np.isnan(v) and w[k] > 0}
+        row["health"] = sum(v * w[k] for k, v in ok.items()) / sum(w[k] for k in ok) if ok else np.nan
+        rows[t] = row
+    return pd.DataFrame(rows).T

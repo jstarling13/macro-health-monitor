@@ -165,7 +165,7 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
         fg, fw = model.grade(L[f.key]["score"])
         factors.append({"key": f.key, "label": f.label, "why": f.why, "score": L[f.key]["score"],
                         "grade": fg, "word": fw, "parts": parts,
-                        "change_3m": hist.iloc[-1] - hist.iloc[-4] if len(hist) > 4 else None})
+                        "change_3m": L[f.key]["score"] - m.recent[f.key].iloc[-4]})
 
     core_m = core.groupby(core.index.to_period("M")).last()
     core_m.index = core_m.index.to_timestamp()
@@ -213,11 +213,12 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
         "headline": {
             "score": L["_health"], "grade": hg, "word": hw,
             "pit_series_last": h.iloc[-1],
-            # Changes compare the point-in-time gauge with itself. Comparing
-            # today's newest-data reading with past point-in-time readings
-            # mixed two bases (e.g. the dollar showed -22 when it rose +5).
-            "change_1m": h.iloc[-1] - h.iloc[-2], "change_3m": h.iloc[-1] - h.iloc[-4],
-            "change_12m": h.iloc[-1] - h.iloc[-13],
+            # Changes compare today's reading with the same newest-data
+            # measure 1/3/12 months ago (model.recent_scores). Mixing it with
+            # the lagged backtest series gave contradictory signs.
+            "change_1m": L["_health"] - m.recent["health"].iloc[-2],
+            "change_3m": L["_health"] - m.recent["health"].iloc[-4],
+            "change_12m": L["_health"] - m.recent["health"].iloc[-13],
         },
         "factors": factors,
         "history": {
@@ -227,6 +228,8 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
             "spx": price.tolist(),
             "spx_drawdown": (price / price.cummax() - 1).tolist(),
             "recession": rec.astype(int).tolist(),
+            "recent": {"dates": [d.strftime("%Y-%m") for d in m.recent.index],
+                       **{k: m.recent[k].tolist() for k in m.recent.columns}},
             "components": comp_hist,
         },
         "markets": daily_markets(offline),

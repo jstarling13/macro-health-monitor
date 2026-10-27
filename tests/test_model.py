@@ -76,3 +76,12 @@ def test_recession_odds_by_quintile():
     ro = backtest.recession_odds(signal, rec)
     shares = [r["recession_share"] for r in ro["rows"]]
     assert len(shares) == 5 and shares[0] > 0.9 and shares[-1] == 0.0
+
+
+def test_recent_scores_match_latest_reading():
+    """Today's headline and the 'recent' series must be the same measure,
+    or change figures mix bases (the dollar once showed -22 when it rose)."""
+    m = model.build(offline=True)
+    assert abs(m.recent["health"].iloc[-1] - m.latest["_health"]) < 1e-9
+    for f in model.FACTORS:
+        assert abs(m.recent[f.key].iloc[-1] - m.latest[f.key]["score"]) < 1e-9
