@@ -591,27 +591,14 @@ const ICONS = {
 const icon = (k, size = 20) => { const e = document.createElementNS("http://www.w3.org/2000/svg", "svg"); e.setAttribute("viewBox", "0 0 24 24"); e.setAttribute("width", size); e.setAttribute("height", size);
   e.setAttribute("fill", "none"); e.setAttribute("stroke", "currentColor"); e.setAttribute("stroke-width", "1.8"); e.setAttribute("stroke-linecap", "round"); e.setAttribute("stroke-linejoin", "round"); e.setAttribute("aria-hidden", "true"); e.innerHTML = ICONS[k]; return e; };
 
-// Client scale (plain words, no letter grades).
-const TIERS = [[70, "Strong", "--good"], [55, "Good", "--good"], [45, "Average", "--neutral"], [25, "Below average", "--warning"], [0, "Weak", "--critical"]];
-const tierOf = (s) => TIERS.find(([c]) => s >= c) || TIERS[TIERS.length - 1];
-const tIdx = (s) => TIERS.indexOf(tierOf(s));   // 0 strong ... 4 weak
-const pick = (s, arr) => arr[tIdx(s)];
-const trendWord = (x) => (x > 3 ? ["Improving", "up"] : x < -3 ? ["Weakening", "down"] : ["Steady", "flat"]);
 
 function clientModel() {
-  const d = S.d, hd = d.headline, F = Object.fromEntries(d.factors.map((f) => [f.key, f]));
-  const P = (f, k) => F[f].parts.find((p) => p.key === k) || {};
+  const d = S.d, hd = d.headline;
   const n2 = (x) => Math.abs(x).toFixed(1);
-  const ffc = P("fed", "ff_change_6m").value, sl = P("credit", "sloos").value, bc = P("credit", "bank_credit_yoy").value;
-  const cpi = P("inflation", "core_cpi_gap").value, gdp = P("gdp", "gdp_growth").value, prof = P("earnings", "profits_yoy").value, usd = P("usd", "usd_6m").value;
-  const areas = [
-    { key: "gdp", name: "Economic growth", text: `The economy grew at a ${f1(gdp)}% yearly pace last quarter, ${pick(F.gdp.score, ["well above its usual pace.", "a bit faster than usual.", "close to its usual pace.", "somewhat slower than usual.", "well below its usual pace."])}` },
-    { key: "fed", name: "Interest rates", text: `${pick(F.fed.score, ["Rates are low or falling, which supports borrowing and spending.", "Rate policy is mildly supportive.", "Rate policy is roughly neutral.", "Rates lean restrictive, which can slow borrowing.", "Rates are high or rising, a headwind for borrowing."])} Over six months the Fed's key rate ${ffc > 0.05 ? `rose ${f2(ffc)} points` : ffc < -0.05 ? `fell ${f2(-ffc)} points` : "held steady"}.` },
-    { key: "inflation", name: "Inflation", text: `Prices are rising ${f1(cpi)}% a year, excluding food and energy, ${Math.abs(cpi - 2) < 0.35 ? "right around" : cpi > 2 ? "above" : "below"} the Fed's 2% goal.` },
-    { key: "earnings", name: "Company profits", text: `Corporate profits are ${prof >= 0 ? "up" : "down"} ${n2(prof)}% from a year ago, ${pick(F.earnings.score, ["strong growth.", "solid growth.", "about normal.", "softer than usual.", "a weak showing."])}` },
-    { key: "usd", name: "The dollar", text: `The dollar has ${usd >= 0 ? "risen" : "fallen"} ${n2(usd)}% over six months. ${usd >= 1.5 ? "A stronger dollar can weigh on U.S. companies that sell abroad." : usd <= -1.5 ? "A softer dollar helps U.S. companies that sell abroad." : "That is a fairly normal move."}` },
-    { key: "credit", name: "Lending", text: `Banks are ${sl > 2 ? "tightening" : sl < -2 ? "easing" : "holding steady on"} their lending standards, and total bank lending is up ${f1(bc)}% from a year ago. ${pick(F.credit.score, ["Credit is flowing freely.", "Credit conditions are healthy.", "Credit conditions are about normal.", "Credit is a little tighter than usual.", "Credit is tight."])}` },
-  ].map((a) => ({ ...a, score: F[a.key].score, tier: tierOf(F[a.key].score), trend: trendWord(F[a.key].change_3m) }));
+  // Wording comes from the build (mhd/brief.py), where it is tested and
+  // checked by the publish gate. The page only renders it.
+  const C = d.client, TC = { Strong: "--good", Good: "--good", Average: "--neutral", "Below average": "--warning", Weak: "--critical" };
+  const areas = C.areas.map((a) => ({ ...a, tier: [0, a.tier, TC[a.tier]], trend: [a.trend, a.trend_dir > 0 ? "up" : a.trend_dir < 0 ? "down" : "flat"] }));
   const by = (k) => d.markets.find((m) => m.id === k);
   const asofs = d.markets.map((m) => m.as_of), common = asofs.slice().sort((a, b) => asofs.filter((x) => x === b).length - asofs.filter((x) => x === a).length)[0];
   const old = (m) => ((Date.parse(common) - Date.parse(m.as_of)) / 864e5 > 2 ? ` (as of ${dlong(m.as_of)})` : "");
@@ -624,12 +611,11 @@ function clientModel() {
     { k: "Market nerves", sub: "VIX index", chg: vix.chg_1w, text: `${f1(vix.last)}, ${vix.last < 20 ? "a calm level" : vix.last < 30 ? "somewhat elevated" : "a nervous level"}; ${dirw(vix.chg_1w, "up", "down")} ${n2(vix.chg_1w)}% this week${old(vix)}.` },
     { k: "The dollar", sub: "Broad index", chg: dx.chg_1w, text: `${dirw(dx.chg_1w, "Up", "Down")} ${n2(dx.chg_1w)}% this week${old(dx)}.` },
   ];
-  const better = areas.filter((a) => a.trend[1] === "up").map((a) => a.name), worse = areas.filter((a) => a.trend[1] === "down").map((a) => a.name);
-  const ht = tierOf(hd.score);
+  const better = C.better, worse = C.worse;
+  const ht = [0, C.tier, TC[C.tier]];
   return {
     date: dlong(d.meta.generated_at.slice(0, 10)), through: dlong(common), score: hd.score, tier: ht,
-    headline: pick(hd.score, ["The economy is in strong shape overall.", "The economy is in good shape overall.", "The economy is in average shape: some areas are strong while others are soft.", "The economy is somewhat softer than usual.", "The economy is under strain."]),
-    detail: `${areas.slice().sort((a, b) => b.score - a.score)[0].name} ${areas.slice().sort((a, b) => b.score - a.score)[0].name.endsWith("s") ? "are" : "is"} the brightest spot, while ${areas.slice().sort((a, b) => a.score - b.score)[0].name.toLowerCase()} ${areas.slice().sort((a, b) => a.score - b.score)[0].name.endsWith("s") ? "are" : "is"} the softest.`,
+    headline: C.headline, detail: C.detail,
     areas, markets, better, worse,
   };
 }

@@ -16,7 +16,7 @@ import pandas as pd
 
 import sys
 
-from . import backtest, meta, model, sources, validate
+from . import backtest, brief, meta, model, sources, validate
 
 SITE = Path(__file__).resolve().parent.parent / "site"
 
@@ -281,6 +281,7 @@ def build_payload(offline: bool = False, threshold: float = 45.0) -> dict:
                "last_obs": sources.shiller(True)["P"].index[-1]})
     cites.append(sh)
     payload["sources"] = cites
+    payload["client"] = brief.build(_clean(payload))
     payload["meta"]["latest_data"] = max(mk["as_of"] for mk in payload["markets"])
     return _clean(payload)
 

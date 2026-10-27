@@ -99,6 +99,36 @@ def run(payload: dict, prev: dict | None = None, today: datetime | None = None) 
         lvl = "error" if (sid in used and age > 2 * MAX_AGE_DAYS[fk]) else "warning"
         check(age <= MAX_AGE_DAYS[fk], f"{sid} is up to date (latest observation {s['last_obs']}, period ended {age} days ago)", lvl)
 
+    # Same-basis rule: every change figure must equal today's reading minus
+    # the same measure N months ago (history.recent). Mixing bases once
+    # made the dollar card say "Improving" while the dollar was rising.
+    R = (H.get("recent") or {})
+    if R.get("health") and _num(hd.get("score")):
+        for k, n_back in (("change_1m", 2), ("change_3m", 4), ("change_12m", 13)):
+            if len(R["health"]) >= n_back and _num(hd.get(k)):
+                want = hd["score"] - R["health"][-n_back]
+                check(abs(hd[k] - want) < 0.01, f"Headline {k} uses the same measure as today's reading ({hd[k]:+.2f} vs {want:+.2f})")
+        check(abs(R["health"][-1] - hd["score"]) < 0.01, "Recent history ends at today's headline reading")
+        for f in fs:
+            r = R.get(f["key"])
+            if r and len(r) >= 4 and _num(f.get("change_3m")):
+                check(abs(f["change_3m"] - (f["score"] - r[-4])) < 0.01, f"{f['label']} 3-month change uses the same measure as its score")
+    else:
+        check(False, "Recent same-basis history is present")
+
+    # Client brief: no broken text, no unexplained contradictions.
+    if payload.get("client"):
+        from . import brief
+        try:
+            msgs = brief.problems(payload["client"], payload)
+        except Exception as e:   # bad inputs must block with a reason, not crash the gate
+            msgs = [f"could not be checked ({type(e).__name__}: {e})"]
+        for msg in msgs:
+            check(False, f"Client brief: {msg}")
+        check(True, "Client brief wording is consistent")
+    else:
+        check(False, "Client brief was built")
+
     B = payload.get("backtest", {})
     check(B.get("months", 0) >= 550, f"Backtest covers at least 550 months (got {B.get('months')})")
     for r in B.get("perf", []):
