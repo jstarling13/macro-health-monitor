@@ -267,3 +267,9 @@ table.t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   .cb .brief-foot { padding: 10px 28px 0; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* lite: small-file PDF export (system font, vector charts) */
+html.lite, html.lite * { font-family: Helvetica, Arial, sans-serif !important; }
+html.lite * { box-shadow: none !important; text-shadow: none !important; filter: none !important; }
+html.lite .card, html.lite .cb { overflow: visible !important; }
+html.lite .cb-hero { background: none !important; }

@@ -104,7 +104,7 @@ function card({ title, sub, tools = [], chart, size = "", table: tbl, csv, sourc
   return c;
 }
 function mount(el, build) {
-  const ch = echarts.init(el, null, { renderer: "canvas" });
+  const ch = echarts.init(el, null, { renderer: /[?&]lite\b/.test(location.search) ? "svg" : "canvas" });
   ch.setOption(build());
   el._chart = ch;
   S.charts.push(ch);
@@ -629,7 +629,7 @@ function gaugeSVG(score, size = 220) {
   const c = (z) => (z.startsWith("--") ? `var(${z})` : z);
   const e = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   e.setAttribute("viewBox", `0 0 ${W} ${H}`); e.setAttribute("width", W); e.setAttribute("height", H); e.setAttribute("role", "img"); e.setAttribute("aria-label", `Gauge at ${Math.round(score)} of 100`);
-  e.innerHTML = zones.map(([a, b, z]) => `<path d="${arc(a + 0.6, b - 0.6)}" stroke="${c(z)}" stroke-width="${sw}" fill="none" opacity="0.9"/>`).join("")
+  e.innerHTML = zones.map(([a, b, z]) => `<path d="${arc(a + 0.6, b - 0.6)}" stroke="${c(z)}" stroke-width="${sw}" fill="none" />`).join("")
     + `<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="var(--text)" stroke-width="3.5" stroke-linecap="round"/><circle cx="${cx}" cy="${cy}" r="7" fill="var(--text)"/>`
     + `<text x="14" y="${H - 1}" font-size="10" fill="var(--text-3)">0</text><text x="${W - 26}" y="${H - 1}" font-size="10" fill="var(--text-3)">100</text>`;
   return e;
@@ -755,6 +755,7 @@ function initTheme() {
 
 (async function main() {
   initTheme();
+  if (/[?&]lite\b/.test(location.search)) document.documentElement.classList.add("lite");  // small-file print mode
   $("#app").append(h("div", { class: "skeleton" }, "Loading data…"));
   try {
     const r = await fetch("data.json", { cache: "no-cache" });
