@@ -233,11 +233,18 @@ def market_index(raw: dict[str, pd.Series], offline: bool = False) -> pd.DataFra
     prices + dividends) spliced to FRED SP500 monthly averages for recent
     months. Also returns the T-bill rate for cash."""
     sh = sources.shiller(offline)
-    fred_p = _monthly(raw["SP500"], "mean")
-    fred_p.index = fred_p.index + pd.offsets.MonthEnd(0)
-    p = sh["P"].copy()
-    new = fred_p[fred_p.index > p.index[-1]]
-    p = pd.concat([p, new])
+    spx = raw["SP500"].dropna()
+    g = spx.groupby(spx.index.to_period("M"))
+    fred_p, n_days = g.mean(), g.size()
+    fred_p.index = fred_p.index.to_timestamp() + pd.offsets.MonthEnd(0)
+    n_days.index = fred_p.index
+    # Use FRED from its first complete month (>= 15 trading days) onward.
+    # Shiller's final month is often a single early-month close rather than a
+    # monthly average (Sep 2024 was 1.8% off), so FRED takes over where it can.
+    full = n_days[n_days >= 15].index
+    cut = full[0] if len(full) else fred_p.index[-1] + pd.offsets.MonthEnd(1)
+    new = fred_p[fred_p.index >= cut]
+    p = pd.concat([sh["P"][sh["P"].index < cut], new])
     # Dividends: Shiller D is an annual rate. After it ends, hold the last
     # known dividend yield constant (flagged on the Data page).
     d = sh["D"].reindex(p.index)

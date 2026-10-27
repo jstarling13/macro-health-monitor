@@ -60,3 +60,10 @@ def test_newey_west_recovers_slope():
 
 def test_grades():
     assert model.grade(75)[0] == "A" and model.grade(50)[0] == "C" and model.grade(10)[0] == "F"
+
+
+def test_drop_crisis_removes_overlapping_forward_windows():
+    idx = pd.date_range("2006-01-31", "2010-12-31", freq="ME")
+    drop = backtest._drop_crisis(idx, "2008-09", "2008-12")
+    assert drop["2007-09-30"] and drop["2008-12-31"]          # window touches the crisis
+    assert not drop["2007-07-31"] and not drop["2009-01-31"]  # fully before / after

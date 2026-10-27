@@ -428,6 +428,33 @@ function pageBacktest() {
         h("div", { style: "height:12px" }), table([{ k: "decade", label: "Decade" }, { k: "strategy_cagr", label: "Timing CAGR", r: 1, fmt: pct }, { k: "buy_hold_cagr", label: "Hold CAGR", r: 1, fmt: pct }, { k: "pct_time_invested", label: "% in stocks", r: 1, fmt: (x) => pct(x, 0) }], B.by_decade)),
       table: { cols: [{ k: "horizon", label: "Horizon" }, { k: "months", label: "Months" }, { k: "rank_corr", label: "Rank corr" }, { k: "ret_per_10pts", label: "Return per +10 pts" }, { k: "nw_t_stat", label: "NW t" }], rows: () => B.stats }, csv: "horizon_stats.csv" })));
 
+  // robustness: does the verdict hinge on a few extreme months?
+  const RB = B.robustness, rt = RB.table;
+  const half2 = rt.find((r) => r.test.startsWith("Second half")), half1 = rt.find((r) => r.test.startsWith("First half"));
+  const rbCols = [{ k: "test", label: "Test" }, { k: "months", label: "Months", r: 1 }, { k: "rank_corr_12m", label: "12M rank corr", r: 1, fmt: (x) => sgn(x, 2) },
+    { k: "nw_t_stat", label: "NW t", r: 1, fmt: (x) => sgn(x, 2), cls: (x) => (Math.abs(x) > 1.96 ? "neg" : "") },
+    { k: "top_minus_bottom_quintile", label: "Top − bottom quintile, 12M return", r: 1, fmt: (x) => sgn(x * 100, 1, "%") },
+    { k: "timing_minus_hold_cagr", label: "Timing − hold, CAGR", r: 1, fmt: (x) => sgn(x * 100, 1, "%") }, { k: "note", label: "Detail" }];
+  page.append(h("div", { class: "page-head mt", style: "margin-top:28px" }, h("div", {}, h("div", { class: "eyebrow" }, "Robustness"),
+    h("h1", { style: "font-size:18px" }, "Is the result driven by outliers?"),
+    h("p", {}, "No. Removing each major crash, or capping the most extreme 1% of returns on each side, leaves the answer unchanged: a small negative link that is not statistically significant. Scores are percentile ranks, so a single extreme reading (like 2020's GDP swings) can move a score to 0 or 100 but no further."))));
+  page.append(h("div", { class: "grid g-2" },
+    card({ title: "Headline test, re-run eight ways", sub: "12-month horizon. |t| above 1.96 would be significant at 95%; such cells are highlighted.", sources: ["SHILLER", "SP500", "TB3MS"],
+      body: h("div", { style: "overflow-x:auto" }, table(rbCols.filter((c) => c.k !== "note"), rt)), table: { cols: rbCols, rows: () => rt }, csv: "robustness.csv" }),
+    card({ title: "Correlation across subsets", sub: "Each bar is the 12-month rank correlation in one version of the test. Grey band: bootstrap 95% range.", sources: ["SHILLER", "SP500"],
+      note: `Bootstrap 95% range, full sample: ${sgn(RB.bootstrap_ci[0], 2)} to ${sgn(RB.bootstrap_ci[1], 2)}`,
+      table: { cols: rbCols, rows: () => rt }, csv: "robustness.csv",
+      chart: () => base({ grid: { left: 210, right: 24, top: 10, bottom: 28 },
+        tooltip: { trigger: "item", backgroundColor: v("--surface"), borderColor: v("--border"), textStyle: { color: v("--text") }, formatter: (p) => `${p.name}<br>rank corr <b>${sgn(p.value, 2)}</b><br>t = ${f2(rt[p.dataIndex].nw_t_stat)}` },
+        xAxis: { type: "value", min: -0.5, max: 0.5, axisLabel: { color: v("--text-3") }, splitLine: { lineStyle: { color: v("--grid") } } },
+        yAxis: { type: "category", data: rt.map((r) => r.test), inverse: true, axisLabel: { color: v("--text-2"), fontSize: 11 }, axisTick: { show: false }, axisLine: { lineStyle: { color: v("--border") } } },
+        series: [{ type: "bar", barMaxWidth: 14, data: rt.map((r) => ({ value: r.rank_corr_12m, itemStyle: { color: Math.abs(r.nw_t_stat) > 1.96 ? v("--critical") : v("--s1"), borderRadius: 3 } })),
+          markArea: { silent: true, itemStyle: { color: v("--surface-2") }, data: [[{ xAxis: RB.bootstrap_ci[0] }, { xAxis: RB.bootstrap_ci[1] }]] } }] }) })));
+  page.append(h("div", { class: "callout warn mt" }, h("b", {}, "The relationship is not stable over time. "),
+    `Before ${half2.test.match(/\d{4}/)[0]} a higher gauge was followed by slightly better returns (rank corr ${sgn(half1.rank_corr_12m, 2)}, t = ${f2(half1.nw_t_stat)}). `
+    + `Since then it has been followed by clearly worse returns (${sgn(half2.rank_corr_12m, 2)}, t = ${f2(half2.nw_t_stat)}), meaning good macro news was already priced in. `
+    + `One reading per year gives correlations from ${sgn(RB.nonoverlap.min, 2)} to ${sgn(RB.nonoverlap.max, 2)} depending on the start month. A signal that changes sign between eras should not be traded on, and the recent negative result was found after the fact.`));
+
   page.append(h("div", { class: "callout mt" }, h("b", {}, "Caveats. "), "FRED serves today's revised GDP and profit figures, not first prints, which flatters the backtest slightly. Monthly-average prices smooth returns. No trading costs or taxes. Factor choices reflect hindsight about what usually matters, even though no parameter was fitted. Overlapping 12-month windows are handled with Newey-West standard errors."));
   return page;
 }

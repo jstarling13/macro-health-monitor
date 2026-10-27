@@ -126,3 +126,66 @@ def factor_diagnostics(factors: pd.DataFrame, health: pd.Series, mkt: pd.DataFra
         slope, t = newey_west_t(d.iloc[:, 1].to_numpy(), d.iloc[:, 0].to_numpy(), 13)
         rows.append({"signal": k, "months": len(d), "rank_corr_12m": rho, "nw_t_stat": t})
     return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------------- robustness
+
+CRISES = {"Dot-com crash": ("2000-03", "2002-10"), "Financial crisis": ("2007-10", "2009-03"),
+          "COVID crash": ("2020-02", "2020-04")}
+
+
+def _drop_crisis(idx: pd.DatetimeIndex, start: str, end: str) -> pd.Series:
+    """True for signal months whose 12-month forward window touches the
+    crisis (so the crash return is fully removed, not just its first month)."""
+    s, e = pd.Timestamp(start) + pd.offsets.MonthEnd(0), pd.Timestamp(end) + pd.offsets.MonthEnd(0)
+    return pd.Series((idx + pd.DateOffset(months=13) >= s) & (idx <= e), index=idx)
+
+
+def _row(name, signal, fwd12, strat, note=""):
+    d = pd.concat([signal.rename("s"), fwd12.rename("r")], axis=1).dropna()
+    rho = stats.spearmanr(d["s"], d["r"])[0]
+    _, t = newey_west_t(d["r"].to_numpy(), d["s"].to_numpy(), 13)
+    q = pd.qcut(d["s"], 5, labels=False)
+    spread = d["r"][q == 4].mean() - d["r"][q == 0].mean()
+    s = strat.reindex(d.index).dropna()
+    excess = perf(s["strategy"]).get("CAGR", np.nan) - perf(s["stock"]).get("CAGR", np.nan)
+    return {"test": name, "months": len(d), "rank_corr_12m": rho, "nw_t_stat": t,
+            "top_minus_bottom_quintile": spread, "timing_minus_hold_cagr": excess, "note": note}
+
+
+def robustness(signal: pd.Series, mkt: pd.DataFrame, threshold: float = 45.0, seed: int = 0) -> dict:
+    """Does the verdict depend on a few extreme months? Re-run the headline
+    test with crashes removed, extreme returns capped, and on each half of the
+    sample; plus a block-bootstrap confidence interval."""
+    fwd = forward_returns(mkt["tr_index"], (12,)).reindex(signal.index)["fwd_12m"]
+    strat = strategy(signal, mkt, threshold)
+    rows = [_row("Full sample", signal, fwd, strat)]
+    keep_all = pd.Series(True, index=signal.index)
+    for name, (a, b) in CRISES.items():
+        drop = _drop_crisis(signal.index, a, b)
+        keep_all &= ~drop
+        rows.append(_row(f"Without {name.lower()}", signal[~drop], fwd[~drop], strat,
+                         f"Drops signals whose next 12 months overlap {a} to {b}"))
+    rows.append(_row("Without all three crashes", signal[keep_all], fwd[keep_all], strat))
+    lo, hi = fwd.quantile([0.01, 0.99])
+    rows.append(_row("Extreme returns capped (1st/99th pct)", signal, fwd.clip(lo, hi), strat,
+                     f"Caps 12m returns at {lo:.0%} / {hi:.0%}"))
+    mid = signal.dropna().index[len(signal.dropna()) // 2]
+    rows.append(_row(f"First half (to {mid:%Y})", signal[:mid], fwd[:mid], strat))
+    rows.append(_row(f"Second half (from {mid:%Y})", signal[mid:], fwd[mid:], strat))
+
+    # Non-overlapping samples: one reading per year, for each of 12 start months.
+    d = pd.concat([signal.rename("s"), fwd.rename("r")], axis=1).dropna()
+    nonover = [stats.spearmanr(d.iloc[k::12]["s"], d.iloc[k::12]["r"])[0] for k in range(12)]
+
+    # Moving-block bootstrap (24-month blocks keep the autocorrelation).
+    rng = np.random.default_rng(seed)
+    x, y, n, L = d["s"].to_numpy(), d["r"].to_numpy(), len(d), 24
+    boots = []
+    for _ in range(2000):
+        starts = rng.integers(0, n - L, size=n // L + 1)
+        ix = np.concatenate([np.arange(s0, s0 + L) for s0 in starts])[:n]
+        boots.append(stats.spearmanr(x[ix], y[ix])[0])
+    ci = np.percentile(boots, [2.5, 97.5])
+    return {"table": pd.DataFrame(rows), "nonoverlap": {"min": min(nonover), "median": float(np.median(nonover)),
+            "max": max(nonover), "years": len(d) // 12}, "bootstrap_ci": [float(ci[0]), float(ci[1])]}
