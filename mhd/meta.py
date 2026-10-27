@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import time
 
 from . import sources
 
 PATH = sources.CACHE / "meta.json"
-MAX_AGE = 7 * 24 * 3600
+MAX_AGE = float(os.environ.get("MHD_META_MAX_AGE_HOURS", 7 * 24)) * 3600
 
 
 def _txt(s: str | None) -> str | None:

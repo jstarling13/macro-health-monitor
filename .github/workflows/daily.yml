@@ -42,6 +42,9 @@ jobs:
           restore-keys: data-cache-
 
       - name: Build data.json
+        env:
+          MHD_MAX_AGE_HOURS: "0"        # always download fresh data
+          MHD_META_MAX_AGE_HOURS: "0"   # and fresh source citations
         run: python -W ignore -m mhd.export
 
       - name: Tests

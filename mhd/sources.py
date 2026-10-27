@@ -12,6 +12,7 @@ an outage instead of plotting nothing.
 from __future__ import annotations
 
 import io
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,10 @@ SHILLER_URLS = [
     "https://img1.wsimg.com/blobby/go/e5e77e0b-59d1-44d9-ab25-4763ac982e53/downloads/ie_data.xls",
     "http://www.econ.yale.edu/~shiller/data/ie_data.xls",
 ]
-MAX_AGE_HOURS = 12
+# How old a cached download may be before it is fetched again. The daily
+# cloud build sets this to 0: restored caches look brand-new to the file
+# system, so without it the hosted site would never re-download.
+MAX_AGE_HOURS = float(os.environ.get("MHD_MAX_AGE_HOURS", 12))
 
 
 @dataclass
